@@ -558,28 +558,106 @@ export default function App() {
   // --------------------------------------------------------------------------
   // GEMINI AI HELPER FUNCTION (Calls Real Gemini API or Smart Fallback)
   // --------------------------------------------------------------------------
-  async function callGeminiAI(promptText) {
+async function callGeminiAI(promptText, rawUserQuestion = "") {
     const activeKey = (geminiKey || envGeminiKey || "").trim();
+
+    // 1. If a Gemini API Key is provided, try the current Gemini models in order
     if (activeKey) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: promptText }] }],
-            }),
+      const modelsToTry = [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+      ];
+
+      for (const modelName of modelsToTry) {
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${activeKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: promptText }] }],
+              }),
+            }
+          );
+
+          const data = await response.json();
+          if (response.ok) {
+            const reply = data?.candidates?.[0]?.content?.parts
+              ?.map((p) => p.text || "")
+              .join("\n")
+              .trim();
+            if (reply) return reply;
+          } else {
+            console.warn(`Model ${modelName} returned:`, data?.error?.message);
           }
-        );
-        const data = await response.json();
-        const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (reply) return reply;
-      } catch (err) {
-        console.error("Gemini API error:", err);
+        } catch (err) {
+          console.error(`Request error on ${modelName}:`, err);
+        }
       }
     }
-    return null;
+
+    // 2. Smart Local Q&A Assistant (Answers real questions using live app data)
+    if (!rawUserQuestion) return null;
+    const q = rawUserQuestion.toLowerCase();
+    const freeTotal = currentUser?.days_off_total ?? 22;
+    const freeUsed = currentUser?.days_off_used ?? 0;
+    const freeLeft = Math.max(0, freeTotal - freeUsed);
+    const sickUsed = currentUser?.sick_days_used ?? 0;
+
+    // Questions about holidays
+    if (q.includes("holiday") || q.includes("feriado") || q.includes("christmas") || q.includes("easter")) {
+      const holList = Object.entries(holidays)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([d, name]) => `• ${d}: ${name}`)
+        .join("\n");
+      return `🎉 **2026 Public Holidays Calendar:**\n${holList}`;
+    }
+
+    // Questions about rules, guidelines, or policies
+    if (q.includes("rule") || q.includes("policy") || q.includes("guideline") || q.includes("norma")) {
+      return `📖 **Current Organization Rules:**\n${markdownRules}`;
+    }
+
+    // Questions about today's or selected date's schedule/tasks
+    if (q.includes("task") || q.includes("schedule") || q.includes("today") || q.includes("working on") || q.includes("slot")) {
+      const myTasksToday = ALL_SLOTS.map((s) => {
+        const t = tasks[`${selectedDate}_${s.id}_${currentUser?.id}`];
+        return t ? `• ${s.label}: **${t.title}** (${categories[t.category]?.label || t.category})` : null;
+      }).filter(Boolean);
+
+      return myTasksToday.length > 0
+        ? `📅 **Your Tasks on ${selectedDate}:**\n${myTasksToday.join("\n")}`
+        : `📅 You have no tasks scheduled yet on **${selectedDate}**. Click any Morning or Afternoon slot on the Daily or Weekly grid to assign one!`;
+    }
+
+    // Questions about team members or roles
+    if (q.includes("member") || q.includes("team") || q.includes("who") || q.includes("admin") || q.includes("moderator")) {
+      const roster = members.map((m) => `• ${m.name} (${m.role} — ${m.dept || "General"})`).join("\n");
+      return `👥 **Active Team Roster (${members.length} members):**\n${roster}`;
+    }
+
+    // Questions about exporting CSV or monthly reports
+    if (q.includes("export") || q.includes("csv") || q.includes("excel") || q.includes("report") || q.includes("download")) {
+      return `📊 **How to Export & Generate Reports:**\n1. **Weekly CSV (with Free Days):** Go to the **Weekly Schedule** tab and click **Export Weekly CSV**.\n2. **Monthly AI Evaluation:** Go to the **AI Monthly Report** tab, select the month and member, and click **Generate AI Monthly Evaluation**.`;
+    }
+
+    // Questions about leave, vacation, sick days, or days off
+    if (q.includes("free") || q.includes("leave") || q.includes("vacation") || q.includes("sick") || q.includes("day off")) {
+      return `🌴 **Your Leave & Absence Summary:**\n• Free Days Left: **${freeLeft} days** (${freeUsed} used out of ${freeTotal})\n• Sick Days Logged: **${sickUsed} days**\nTo request a day off or log a sick day, click **+ Day Off / Sick** in the top bar.`;
+    }
+
+    // General help overview (and reminder to add Gemini API key for open-ended AI questions)
+    return (
+      `🤖 **Sync8 Assistant — Here is what you can ask me with \`/help\`:**\n` +
+      `• \`/help what are my tasks today?\` — Lists your scheduled slots for ${selectedDate}\n` +
+      `• \`/help public holidays\` — Lists all 2026 public holidays\n` +
+      `• \`/help team members\` — Shows the team roster and roles\n` +
+      `• \`/help rules\` — Displays the organization's Markdown guidelines\n` +
+      `• \`/help how to export csv\` — Instructions for Weekly CSV & Monthly Reports\n\n` +
+      `*(Tip: To unlock open-ended AI answers powered by Google Gemini, paste a free Gemini API key from aistudio.google.com into the **Admin & Leave** tab at the bottom!)*`
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -833,7 +911,7 @@ Task Categories available: ${Object.values(categories).map((c) => c.label).join(
 Organization Rules: ${markdownRules}
 Answer the user's question concisely and helpfully in 2-4 sentences: "${question}"`;
 
-      const geminiReply = await callGeminiAI(systemContext);
+      const geminiReply = await callGeminiAI(systemContext, question);
       const replyText =
         geminiReply ||
         `🤖 Gemini Assistant: For "${question}" — You currently have ${freeDaysLeft} free days left (${currentUser.days_off_used || 0} used of ${currentUser.days_off_total || 22}). You can assign 1-hour tasks under ${Object.values(categories).map((c) => c.label).join(", ")}, export your Weekly CSV with leave balances in the Weekly tab, or check team rules in the Rules tab.`;
