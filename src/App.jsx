@@ -561,26 +561,27 @@ export default function App() {
 async function callGeminiAI(promptText, rawUserQuestion = "") {
     const activeKey = (geminiKey || envGeminiKey || "").trim();
 
-    // 1. If a Gemini API Key is provided, try the current Gemini models in order
-    if (activeKey) {
-      const modelsToTry = [
-        "gemini-3.8-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-2.5-flash",
-      ];
+    // 1. If a valid-looking Gemini API key exists (starts with AIza), call Google API with an 8s timeout
+    if (activeKey && activeKey.startsWith("AIza")) {
+      const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
 
       for (const modelName of modelsToTry) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
         try {
           const response = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${activeKey}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
+              signal: controller.signal,
               body: JSON.stringify({
-                contents: [{ role: "user", parts: [{ text: promptText }] }],
+                contents: [{ parts: [{ text: promptText }] }],
               }),
             }
           );
+          clearTimeout(timeoutId);
 
           const data = await response.json();
           if (response.ok) {
@@ -590,15 +591,16 @@ async function callGeminiAI(promptText, rawUserQuestion = "") {
               .trim();
             if (reply) return reply;
           } else {
-            console.warn(`Model ${modelName} returned:`, data?.error?.message);
+            console.warn(`Gemini API (${modelName}) error:`, data?.error?.message);
           }
         } catch (err) {
-          console.error(`Request error on ${modelName}:`, err);
+          clearTimeout(timeoutId);
+          console.warn(`Gemini request failed on ${modelName}:`, err.message);
         }
       }
     }
 
-    // 2. Smart Local Q&A Assistant (Answers real questions using live app data)
+    // 2. Instant Built-In Smart Assistant (Never hangs, answers using live platform data)
     if (!rawUserQuestion) return null;
     const q = rawUserQuestion.toLowerCase();
     const freeTotal = currentUser?.days_off_total ?? 22;
@@ -606,57 +608,51 @@ async function callGeminiAI(promptText, rawUserQuestion = "") {
     const freeLeft = Math.max(0, freeTotal - freeUsed);
     const sickUsed = currentUser?.sick_days_used ?? 0;
 
-    // Questions about holidays
     if (q.includes("holiday") || q.includes("feriado") || q.includes("christmas") || q.includes("easter")) {
       const holList = Object.entries(holidays)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([d, name]) => `• ${d}: ${name}`)
         .join("\n");
-      return `🎉 **2026 Public Holidays Calendar:**\n${holList}`;
+      return `🎉 2026 Public Holidays:\n${holList}`;
     }
 
-    // Questions about rules, guidelines, or policies
-    if (q.includes("rule") || q.includes("policy") || q.includes("guideline") || q.includes("norma")) {
-      return `📖 **Current Organization Rules:**\n${markdownRules}`;
+    if (q.includes("rule") || q.includes("policy") || q.includes("guideline") || q.includes("markdown")) {
+      return `📖 Organization Rules:\n${markdownRules}`;
     }
 
-    // Questions about today's or selected date's schedule/tasks
-    if (q.includes("task") || q.includes("schedule") || q.includes("today") || q.includes("working on") || q.includes("slot")) {
+    if (q.includes("task") || q.includes("schedule") || q.includes("today") || q.includes("slot") || q.includes("work")) {
       const myTasksToday = ALL_SLOTS.map((s) => {
         const t = tasks[`${selectedDate}_${s.id}_${currentUser?.id}`];
-        return t ? `• ${s.label}: **${t.title}** (${categories[t.category]?.label || t.category})` : null;
+        return t ? `• ${s.label}: ${t.title} (${categories[t.category]?.label || t.category})` : null;
       }).filter(Boolean);
 
       return myTasksToday.length > 0
-        ? `📅 **Your Tasks on ${selectedDate}:**\n${myTasksToday.join("\n")}`
-        : `📅 You have no tasks scheduled yet on **${selectedDate}**. Click any Morning or Afternoon slot on the Daily or Weekly grid to assign one!`;
+        ? `📅 Your Tasks on ${selectedDate}:\n${myTasksToday.join("\n")}`
+        : `📅 You have no tasks scheduled on ${selectedDate}. Click any Morning or Afternoon slot to add one!`;
     }
 
-    // Questions about team members or roles
     if (q.includes("member") || q.includes("team") || q.includes("who") || q.includes("admin") || q.includes("moderator")) {
       const roster = members.map((m) => `• ${m.name} (${m.role} — ${m.dept || "General"})`).join("\n");
-      return `👥 **Active Team Roster (${members.length} members):**\n${roster}`;
+      return `👥 Team Roster (${members.length} members):\n${roster}`;
     }
 
-    // Questions about exporting CSV or monthly reports
     if (q.includes("export") || q.includes("csv") || q.includes("excel") || q.includes("report") || q.includes("download")) {
-      return `📊 **How to Export & Generate Reports:**\n1. **Weekly CSV (with Free Days):** Go to the **Weekly Schedule** tab and click **Export Weekly CSV**.\n2. **Monthly AI Evaluation:** Go to the **AI Monthly Report** tab, select the month and member, and click **Generate AI Monthly Evaluation**.`;
+      return `📊 How to Export & Generate Reports:\n1. Weekly CSV (with Free Days): Open the "Weekly Schedule" tab and click "Export Weekly CSV".\n2. Monthly AI Report: Open the "AI Monthly Report" tab and click "Generate AI Monthly Evaluation".`;
     }
 
-    // Questions about leave, vacation, sick days, or days off
     if (q.includes("free") || q.includes("leave") || q.includes("vacation") || q.includes("sick") || q.includes("day off")) {
-      return `🌴 **Your Leave & Absence Summary:**\n• Free Days Left: **${freeLeft} days** (${freeUsed} used out of ${freeTotal})\n• Sick Days Logged: **${sickUsed} days**\nTo request a day off or log a sick day, click **+ Day Off / Sick** in the top bar.`;
+      return `🌴 Your Leave Balance:\n• Free Days Left: ${freeLeft} days (${freeUsed} used of ${freeTotal})\n• Sick Days Logged: ${sickUsed} days\nClick "+ Day Off / Sick" in the top bar to submit a request.`;
     }
 
-    // General help overview (and reminder to add Gemini API key for open-ended AI questions)
     return (
-      `🤖 **Sync8 Assistant — Here is what you can ask me with \`/help\`:**\n` +
-      `• \`/help what are my tasks today?\` — Lists your scheduled slots for ${selectedDate}\n` +
-      `• \`/help public holidays\` — Lists all 2026 public holidays\n` +
-      `• \`/help team members\` — Shows the team roster and roles\n` +
-      `• \`/help rules\` — Displays the organization's Markdown guidelines\n` +
-      `• \`/help how to export csv\` — Instructions for Weekly CSV & Monthly Reports\n\n` +
-      `*(Tip: To unlock open-ended AI answers powered by Google Gemini, paste a free Gemini API key from aistudio.google.com into the **Admin & Leave** tab at the bottom!)*`
+      `🤖 Sync8 Assistant — You asked: "${rawUserQuestion}"\n\n` +
+      `Here is what I can answer right now:\n` +
+      `• "/help my tasks today" — Shows your schedule for ${selectedDate}\n` +
+      `• "/help public holidays" — Lists all 2026 holidays\n` +
+      `• "/help team members" — Lists all members and roles\n` +
+      `• "/help rules" — Shows the organization Markdown rules\n` +
+      `• "/help leave balance" — Shows your free days & sick days\n\n` +
+      `(Note: To enable open-ended Google Gemini answers for any question, paste a valid "AIza..." Gemini API key in the Admin & Leave tab at the bottom.)`
     );
   }
 
@@ -885,61 +881,70 @@ async function callGeminiAI(promptText, rawUserQuestion = "") {
     setMessages((prev) => [...prev, userMsg]);
     setChatInput("");
 
+    // Save user message in background without blocking the UI
     if (supabase) {
-      await supabase.from("messages").insert({
-        channel: userMsg.channel,
-        recipient_id: userMsg.recipientId,
-        sender_id: userMsg.senderId,
-        sender_name: userMsg.senderName,
-        sender_role: userMsg.senderRole,
-        text: userMsg.text,
-        time_label: userMsg.time,
-      });
+      supabase
+        .from("messages")
+        .insert({
+          channel: userMsg.channel,
+          recipient_id: userMsg.recipientId,
+          sender_id: userMsg.senderId,
+          sender_name: userMsg.senderName,
+          sender_role: userMsg.senderRole,
+          text: userMsg.text,
+          time_label: userMsg.time,
+        })
+        .then(() => {});
     }
 
-    // Check for /help command
+    // Handle /help command with guaranteed try/finally so it never hangs
     if (rawText.toLowerCase().startsWith("/help")) {
       const question = rawText.slice(5).trim() || "How do I use this platform?";
       setAiThinking(true);
 
-      const freeDaysLeft =
-        (currentUser.days_off_total || 22) - (currentUser.days_off_used || 0);
-      const systemContext = `You are the helpful AI assistant inside the Sync8 Team Schedule Platform.
+      try {
+        const freeDaysLeft =
+          (currentUser.days_off_total || 22) - (currentUser.days_off_used || 0);
+        const systemContext = `You are the AI assistant inside the Sync8 Team Schedule Platform.
 Current User: ${currentUser.name} (${currentUser.role}, Dept: ${currentUser.dept}).
 Free Days Left: ${freeDaysLeft} days (Used: ${currentUser.days_off_used || 0} of ${currentUser.days_off_total || 22}, Sick days: ${currentUser.sick_days_used || 0}).
-Task Categories available: ${Object.values(categories).map((c) => c.label).join(", ")}.
+Task Categories: ${Object.values(categories).map((c) => c.label).join(", ")}.
 Organization Rules: ${markdownRules}
-Answer the user's question concisely and helpfully in 2-4 sentences: "${question}"`;
+Answer the user's question directly and concisely: "${question}"`;
 
-      const geminiReply = await callGeminiAI(systemContext, question);
-      const replyText =
-        geminiReply ||
-        `🤖 Gemini Assistant: For "${question}" — You currently have ${freeDaysLeft} free days left (${currentUser.days_off_used || 0} used of ${currentUser.days_off_total || 22}). You can assign 1-hour tasks under ${Object.values(categories).map((c) => c.label).join(", ")}, export your Weekly CSV with leave balances in the Weekly tab, or check team rules in the Rules tab.`;
+        const replyText = await callGeminiAI(systemContext, question);
 
-      const botMsg = {
-        id: Date.now() + 1,
-        channel: activeChannelId,
-        recipientId: isDM ? currentUser.id : null,
-        senderId: "gemini_ai",
-        senderName: "Gemini AI (/help)",
-        senderRole: "AI Assistant",
-        text: replyText,
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
+        const botMsg = {
+          id: Date.now() + 1,
+          channel: activeChannelId,
+          recipientId: isDM ? currentUser.id : null,
+          senderId: "gemini_ai",
+          senderName: "Gemini AI (/help)",
+          senderRole: "AI Assistant",
+          text: replyText || "I couldn't process that request. Try '/help rules' or '/help holidays'.",
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        };
 
-      setMessages((prev) => [...prev, botMsg]);
-      setAiThinking(false);
+        setMessages((prev) => [...prev, botMsg]);
 
-      if (supabase) {
-        await supabase.from("messages").insert({
-          channel: botMsg.channel,
-          recipient_id: botMsg.recipientId,
-          sender_id: botMsg.senderId,
-          sender_name: botMsg.senderName,
-          sender_role: botMsg.senderRole,
-          text: botMsg.text,
-          time_label: botMsg.time,
-        });
+        if (supabase) {
+          supabase
+            .from("messages")
+            .insert({
+              channel: botMsg.channel,
+              recipient_id: botMsg.recipientId,
+              sender_id: botMsg.senderId,
+              sender_name: botMsg.senderName,
+              sender_role: botMsg.senderRole,
+              text: botMsg.text,
+              time_label: botMsg.time,
+            })
+            .then(() => {});
+        }
+      } catch (err) {
+        console.error("Help command error:", err);
+      } finally {
+        setAiThinking(false);
       }
     }
   };
