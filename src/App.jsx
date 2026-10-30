@@ -3,25 +3,24 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Calendar,
   Clock,
-  Users,
   MessageSquare,
   Shield,
   Plus,
   Trash2,
   Send,
   User,
-  CheckCircle2,
-  AlertCircle,
-  ChevronLeft,
-  ChevronRight,
   Sun,
   Sunset,
   Database,
   X,
+  LogOut,
+  Lock,
+  Mail,
+  UserPlus,
 } from "lucide-react";
 
 // ============================================================================
-// 1. SUPABASE CONNECTION (Reads your keys from .env.local automatically)
+// 1. SUPABASE CONNECTION
 // ============================================================================
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -85,19 +84,6 @@ const CATEGORIES = {
   },
 };
 
-const INITIAL_MEMBERS = [
-  { id: "u1", name: "Gabriel M.", role: "Admin", dept: "Management", avatar: "GM" },
-  { id: "u2", name: "Paula S.", role: "Moderator", dept: "Coordination", avatar: "PS" },
-  { id: "u3", name: "Lucas C.", role: "Moderator", dept: "Community", avatar: "LC" },
-  { id: "u4", name: "Bruna S.", role: "Member", dept: "Communication", avatar: "BS" },
-  { id: "u5", name: "Júlia V.", role: "Member", dept: "Youth Work", avatar: "JV" },
-  { id: "u6", name: "Mateo R.", role: "Member", dept: "Operations", avatar: "MR" },
-  { id: "u7", name: "Elena K.", role: "Member", dept: "Design", avatar: "EK" },
-  { id: "u8", name: "David T.", role: "Member", dept: "Tech", avatar: "DT" },
-  { id: "u9", name: "Sofia L.", role: "Member", dept: "Outreach", avatar: "SL" },
-  { id: "u10", name: "Marco B.", role: "Member", dept: "Logistics", avatar: "MB" },
-];
-
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -107,103 +93,137 @@ const MONTHS = [
 // 3. MAIN APPLICATION COMPONENT
 // ============================================================================
 export default function App() {
-  const [activeTab, setActiveTab] = useState("daily"); // daily | individual | annual | admin
+  // Authentication State
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState("login"); // "login" | "signup"
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authDept, setAuthDept] = useState("Management");
+  const [authError, setAuthError] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+
+  // App Navigation & Data State
+  const [activeTab, setActiveTab] = useState("daily");
   const [selectedDate, setSelectedDate] = useState("2026-10-29");
-  const [members, setMembers] = useState(INITIAL_MEMBERS);
-  const [currentUserId, setCurrentUserId] = useState("u1");
-  const [focusedMemberId, setFocusedMemberId] = useState("u1");
-
-  // Tasks dictionary keyed by: `${date}_${slotId}_${memberId}`
-  const [tasks, setTasks] = useState({
-    "2026-10-29_m1_u1": {
-      id: "t_demo_1",
-      title: "Grant Budget Review",
-      category: "pm",
-      notes: "Verify Q4 allocation sheets",
-      comments: [
-        { id: 1, author: "Paula S.", role: "Moderator", text: "Updated the spreadsheet!", time: "09:15" },
-      ],
-    },
-    "2026-10-29_m2_u2": {
-      id: "t_demo_2",
-      title: "Team Morning Sync",
-      category: "team",
-      notes: "Weekly objectives alignment",
-      comments: [],
-    },
-    "2026-10-29_a1_u3": {
-      id: "t_demo_3",
-      title: "Local Partners Workshop",
-      category: "community",
-      notes: "Prepare room and materials",
-      comments: [],
-    },
-  });
-
-  // Chat state
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      channel: "general",
-      senderId: "u2",
-      senderName: "Paula S.",
-      senderRole: "Moderator",
-      text: "Welcome to the Sync8 Annual Platform! Click any 1-hour slot to assign tasks.",
-      time: "08:50",
-    },
-  ]);
+  const [members, setMembers] = useState([]);
+  const [focusedMemberId, setFocusedMemberId] = useState("");
+  const [tasks, setTasks] = useState({});
+  const [messages, setMessages] = useState([]);
   const [chatChannel, setChatChannel] = useState("general");
   const [chatInput, setChatInput] = useState("");
 
-  // Task Modal state
-  const [selectedCell, setSelectedCell] = useState(null); // { dateKey, slotId, memberId }
+  // Task Modal State
+  const [selectedCell, setSelectedCell] = useState(null);
   const [formTitle, setFormTitle] = useState("");
   const [formCategory, setFormCategory] = useState("member");
   const [formNotes, setFormNotes] = useState("");
   const [commentInput, setCommentInput] = useState("");
 
-  // Admin New Member state
+  // Admin Form State
   const [newMemberName, setNewMemberName] = useState("");
+  const [newMemberEmail, setNewMemberEmail] = useState("");
   const [newMemberRole, setNewMemberRole] = useState("Member");
   const [newMemberDept, setNewMemberDept] = useState("General");
 
-  // Database Sync Indicator
-  const [dbStatus, setDbStatus] = useState(supabase ? "Connecting..." : "Local Demo Mode");
-
-  const currentUser = useMemo(
-    () => members.find((m) => m.id === currentUserId) || members[0],
-    [members, currentUserId]
-  );
+  const [dbStatus, setDbStatus] = useState(supabase ? "Connecting..." : "Missing .env Keys");
 
   // --------------------------------------------------------------------------
-  // LOAD DATA FROM SUPABASE ON STARTUP
+  // LISTEN FOR SUPABASE LOGIN / LOGOUT SESSION
   // --------------------------------------------------------------------------
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
 
-    async function loadFromSupabase() {
+    supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+      setSession(activeSession);
+      setAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // --------------------------------------------------------------------------
+  // LOAD DATABASE & ENSURE LOGGED-IN USER HAS A PROFILE ROW
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!supabase || !session?.user) return;
+
+    async function syncUserAndLoadData() {
       try {
-        // 1. Load Members
-        const { data: dbMembers, error: errMembers } = await supabase
+        const user = session.user;
+        const userEmail = (user.email || "").toLowerCase();
+
+        // 1. Fetch all profiles
+        const { data: existingProfiles, error: errProf } = await supabase
           .from("profiles")
           .select("*")
           .order("created_at");
 
-        if (errMembers) throw errMembers;
+        if (errProf) throw errProf;
 
-        if (dbMembers && dbMembers.length > 0) {
-          setMembers(dbMembers);
-        } else {
-          // First time running: save our 10 starter members into Supabase
-          await supabase.from("profiles").upsert(INITIAL_MEMBERS);
+        let allMembers = existingProfiles || [];
+
+        // Check if logged-in user already has a profile by ID or pre-invited Email
+        let myProfile =
+          allMembers.find((m) => m.id === user.id) ||
+          allMembers.find((m) => m.email && m.email.toLowerCase() === userEmail);
+
+        if (!myProfile) {
+          // Determine name & initials from signup metadata or email
+          const fullName =
+            user.user_metadata?.full_name || userEmail.split("@")[0] || "Team Member";
+          const dept = user.user_metadata?.dept || "General";
+          const initials = fullName
+            .split(" ")
+            .map((part) => part[0])
+            .join("")
+            .toUpperCase()
+            .slice(0, 2);
+
+          // If no real email-linked Admin exists yet, make the first registered user Admin!
+          const hasRealAdmin = allMembers.some((m) => m.role === "Admin" && m.email);
+          const assignedRole = hasRealAdmin ? "Member" : "Admin";
+
+          const newProfile = {
+            id: user.id,
+            name: fullName,
+            email: userEmail,
+            role: assignedRole,
+            dept: dept,
+            avatar: initials || "TM",
+          };
+
+          await supabase.from("profiles").upsert(newProfile);
+          allMembers = [newProfile, ...allMembers];
+          myProfile = newProfile;
+        } else if (myProfile.id !== user.id) {
+          // If an Admin pre-added them by email, update the profile ID to match their Auth ID
+          const updatedProfile = { ...myProfile, id: user.id, email: userEmail };
+          await supabase.from("profiles").delete().eq("id", myProfile.id);
+          await supabase.from("profiles").upsert(updatedProfile);
+          allMembers = allMembers.map((m) => (m.id === myProfile.id ? updatedProfile : m));
+          myProfile = updatedProfile;
         }
 
-        // 2. Load Tasks & Comments
+        setMembers(allMembers);
+        setFocusedMemberId(myProfile.id);
+
+        // 2. Load Schedule Tasks & Comments
         const { data: dbTasks } = await supabase
           .from("schedule_tasks")
           .select("*, task_comments(*)");
 
-        if (dbTasks && dbTasks.length > 0) {
+        if (dbTasks) {
           const loadedTasks = {};
           dbTasks.forEach((row) => {
             const key = `${row.task_date}_${row.slot_id}_${row.member_id}`;
@@ -230,7 +250,7 @@ export default function App() {
           .select("*")
           .order("created_at");
 
-        if (dbMsgs && dbMsgs.length > 0) {
+        if (dbMsgs) {
           setMessages(
             dbMsgs.map((m) => ({
               id: m.id,
@@ -246,24 +266,84 @@ export default function App() {
 
         setDbStatus("Supabase Live");
       } catch (err) {
-        console.error("Supabase connection error:", err);
+        console.error("Database sync error:", err);
         setDbStatus("Check SQL Tables");
       }
     }
 
-    loadFromSupabase();
-  }, []);
+    syncUserAndLoadData();
+  }, [session]);
+
+  // Identify the currently logged-in user's profile
+  const currentUser = useMemo(() => {
+    if (!session?.user) return null;
+    const userEmail = (session.user.email || "").toLowerCase();
+    return (
+      members.find((m) => m.id === session.user.id) ||
+      members.find((m) => m.email && m.email.toLowerCase() === userEmail) || {
+        id: session.user.id,
+        name: session.user.user_metadata?.full_name || userEmail.split("@")[0],
+        email: userEmail,
+        role: "Member",
+        dept: "General",
+        avatar: "ME",
+      }
+    );
+  }, [members, session]);
 
   // --------------------------------------------------------------------------
-  // PERMISSION CHECKER (Admin & Moderator can edit all; Member edits own slots)
+  // HANDLE LOGIN OR SIGNUP SUBMIT
+  // --------------------------------------------------------------------------
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    if (!supabase) return;
+    setAuthError("");
+    setAuthSubmitting(true);
+
+    try {
+      if (authMode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            data: {
+              full_name: authName.trim() || authEmail.split("@")[0],
+              dept: authDept.trim() || "General",
+            },
+          },
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (error) throw error;
+      }
+    } catch (err) {
+      setAuthError(err.message || "Authentication failed. Check your email and password.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // PERMISSIONS: Admin & Moderator can edit any slot; Member edits own row
   // --------------------------------------------------------------------------
   const canEditSlot = (targetMemberId) => {
+    if (!currentUser) return false;
     if (currentUser.role === "Admin" || currentUser.role === "Moderator") return true;
     return currentUser.id === targetMemberId;
   };
 
   // --------------------------------------------------------------------------
-  // OPEN SLOT MODAL
+  // OPEN, SAVE, DELETE TASK & COMMENTS
   // --------------------------------------------------------------------------
   const handleOpenCell = (dateKey, slotId, memberId) => {
     const key = `${dateKey}_${slotId}_${memberId}`;
@@ -275,9 +355,6 @@ export default function App() {
     setCommentInput("");
   };
 
-  // --------------------------------------------------------------------------
-  // SAVE TASK (Updates screen AND saves to Supabase)
-  // --------------------------------------------------------------------------
   const handleSaveTask = async (e) => {
     e.preventDefault();
     if (!selectedCell || !formTitle.trim()) return;
@@ -310,9 +387,6 @@ export default function App() {
     }
   };
 
-  // --------------------------------------------------------------------------
-  // DELETE TASK
-  // --------------------------------------------------------------------------
   const handleDeleteTask = async () => {
     if (!selectedCell) return;
     const key = `${selectedCell.dateKey}_${selectedCell.slotId}_${selectedCell.memberId}`;
@@ -330,11 +404,8 @@ export default function App() {
     }
   };
 
-  // --------------------------------------------------------------------------
-  // ADD TASK COMMENT
-  // --------------------------------------------------------------------------
   const handleAddComment = async () => {
-    if (!commentInput.trim() || !selectedCell) return;
+    if (!commentInput.trim() || !selectedCell || !currentUser) return;
     const key = `${selectedCell.dateKey}_${selectedCell.slotId}_${selectedCell.memberId}`;
     const existing = tasks[key];
     if (!existing) return;
@@ -369,11 +440,11 @@ export default function App() {
   };
 
   // --------------------------------------------------------------------------
-  // SEND CHAT / DIRECT MESSAGE
+  // SEND TEAM CHAT MESSAGE
   // --------------------------------------------------------------------------
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
+    if (!chatInput.trim() || !currentUser) return;
 
     const timeNow = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const newMsg = {
@@ -402,11 +473,11 @@ export default function App() {
   };
 
   // --------------------------------------------------------------------------
-  // ADMIN: ADD / REMOVE MEMBERS & SCALE TO 50
+  // ADMIN CONTROLS: PRE-ADD MEMBER, CHANGE ROLE, OR REMOVE MEMBER
   // --------------------------------------------------------------------------
   const handleAddMember = async (e) => {
     e.preventDefault();
-    if (!newMemberName.trim() || currentUser.role !== "Admin") return;
+    if (!newMemberName.trim() || currentUser?.role !== "Admin") return;
 
     const initials = newMemberName
       .trim()
@@ -419,52 +490,185 @@ export default function App() {
     const newMember = {
       id: `u_${Date.now()}`,
       name: newMemberName.trim(),
+      email: newMemberEmail.trim().toLowerCase() || null,
       role: newMemberRole,
       dept: newMemberDept.trim() || "General",
-      avatar: initials,
+      avatar: initials || "TM",
     };
 
     setMembers((prev) => [...prev, newMember]);
     setNewMemberName("");
+    setNewMemberEmail("");
 
     if (supabase) {
       await supabase.from("profiles").upsert(newMember);
     }
   };
 
+  const handleChangeMemberRole = async (memberId, updatedRole) => {
+    if (currentUser?.role !== "Admin") return;
+    setMembers((prev) =>
+      prev.map((m) => (m.id === memberId ? { ...m, role: updatedRole } : m))
+    );
+    if (supabase) {
+      await supabase.from("profiles").update({ role: updatedRole }).eq("id", memberId);
+    }
+  };
+
   const handleRemoveMember = async (id) => {
-    if (currentUser.role !== "Admin" || members.length <= 1) return;
+    if (currentUser?.role !== "Admin" || members.length <= 1) return;
     setMembers((prev) => prev.filter((m) => m.id !== id));
     if (supabase) {
       await supabase.from("profiles").delete().eq("id", id);
     }
   };
 
-  const handleScaleTeam = async (targetCount) => {
-    if (currentUser.role !== "Admin") return;
-    if (targetCount === 10) {
-      setMembers(INITIAL_MEMBERS);
-      return;
-    }
-    const extra = [];
-    for (let i = members.length + 1; i <= targetCount; i++) {
-      extra.push({
-        id: `u${i}`,
-        name: `Member #${i}`,
-        role: i % 8 === 0 ? "Moderator" : "Member",
-        dept: ["Operations", "Community", "Youth Work", "Logistics"][i % 4],
-        avatar: `M${i}`,
-      });
-    }
-    const combined = [...members, ...extra];
-    setMembers(combined);
-    if (supabase) {
-      await supabase.from("profiles").upsert(combined);
-    }
-  };
+  // ==========================================================================
+  // SCREEN 1: AUTHENTICATION LOGIN / SIGNUP SCREEN
+  // ==========================================================================
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-200 flex items-center justify-center text-sm">
+        Loading Sync8 Platform...
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-xl shadow-lg shadow-indigo-600/30">
+              S8
+            </div>
+            <div>
+              <h1 className="font-bold text-lg">Sync8 Annual Platform</h1>
+              <p className="text-xs text-slate-400">
+                4h Morning + 4h Afternoon Team Schedule
+              </p>
+            </div>
+          </div>
+
+          {/* Toggle Login vs Sign Up */}
+          <div className="grid grid-cols-2 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode("login");
+                setAuthError("");
+              }}
+              className={`py-2 rounded-lg transition ${
+                authMode === "login" ? "bg-indigo-600 text-white" : "text-slate-400"
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode("signup");
+                setAuthError("");
+              }}
+              className={`py-2 rounded-lg transition ${
+                authMode === "signup" ? "bg-indigo-600 text-white" : "text-slate-400"
+              }`}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {authError && (
+            <div className="bg-rose-500/10 border border-rose-500/30 text-rose-300 p-3 rounded-xl text-xs">
+              {authError}
+            </div>
+          )}
+
+          <form onSubmit={handleAuthSubmit} className="space-y-4 text-xs">
+            {authMode === "signup" && (
+              <>
+                <div>
+                  <label className="text-slate-400 block mb-1">Full Name</label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      required
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      placeholder="e.g. Gabriel Manea"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-400 block mb-1">Department / Area</label>
+                  <input
+                    type="text"
+                    required
+                    value={authDept}
+                    onChange={(e) => setAuthDept(e.target.value)}
+                    placeholder="e.g. Management, Youth Work, Community"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white"
+                  />
+                </div>
+              </>
+            )}
+
+            <div>
+              <label className="text-slate-400 block mb-1">Email Address</label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="you@organization.org"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-white"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-slate-400 block mb-1">Password (min 6 characters)</label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-white"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-2.5 rounded-xl shadow-lg shadow-indigo-600/20 transition"
+            >
+              {authSubmitting
+                ? "Please wait..."
+                : authMode === "signup"
+                ? "Create Account & Enter Schedule"
+                : "Sign In to Schedule"}
+            </button>
+          </form>
+
+          <p className="text-[11px] text-slate-400 text-center">
+            First registered account is automatically granted <strong>Admin</strong> permissions.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // ==========================================================================
-  // RENDER UI
+  // SCREEN 2: AUTHENTICATED CALENDAR PLATFORM
   // ==========================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -498,9 +702,9 @@ export default function App() {
         <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
           {[
             { id: "daily", label: "Daily 8h Matrix", icon: Clock },
-            { id: "individual", label: "Individual Schedule", icon: User },
+            { id: "individual", label: "My / Individual Schedule", icon: User },
             { id: "annual", label: "12-Month Annual", icon: Calendar },
-            { id: "admin", label: "Admin & Permissions", icon: Shield },
+            { id: "admin", label: "Team & Permissions", icon: Shield },
           ].map((tab) => {
             const Icon = tab.icon;
             return (
@@ -520,20 +724,27 @@ export default function App() {
           })}
         </div>
 
-        {/* ACTIVE USER SWITCHER (To test Admin / Moderator / Member rights) */}
-        <div className="flex items-center gap-2 bg-slate-800/60 px-3 py-1.5 rounded-xl border border-slate-700">
-          <span className="text-xs text-slate-400">Acting as:</span>
-          <select
-            value={currentUserId}
-            onChange={(e) => setCurrentUserId(e.target.value)}
-            className="bg-transparent text-xs font-semibold text-white focus:outline-none cursor-pointer"
+        {/* LOGGED-IN USER BADGE & SIGN OUT */}
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 text-xs flex items-center gap-2">
+            <span className="w-6 h-6 rounded-md bg-indigo-600 text-white font-bold flex items-center justify-center text-[11px]">
+              {currentUser?.avatar || "U"}
+            </span>
+            <div>
+              <span className="font-semibold text-white">{currentUser?.name}</span>
+              <span className="ml-2 px-2 py-0.5 rounded bg-slate-700 text-indigo-300 text-[10px] font-semibold">
+                {currentUser?.role}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={handleSignOut}
+            title="Sign Out"
+            className="bg-slate-800 hover:bg-rose-600/20 hover:text-rose-300 border border-slate-700 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
           >
-            {members.map((m) => (
-              <option key={m.id} value={m.id} className="bg-slate-900 text-white">
-                {m.name} ({m.role})
-              </option>
-            ))}
-          </select>
+            <LogOut className="w-3.5 h-3.5" />
+            Sign Out
+          </button>
         </div>
       </header>
 
@@ -561,7 +772,6 @@ export default function App() {
 
       {/* MAIN WORKSPACE + RIGHT CHAT SIDEBAR */}
       <div className="flex-1 flex overflow-hidden">
-        {/* LEFT MAIN VIEW */}
         <main className="flex-1 overflow-auto p-6">
           {/* 1. DAILY 8-HOUR TEAM MATRIX */}
           {activeTab === "daily" && (
@@ -570,7 +780,7 @@ export default function App() {
                 <table className="w-full border-collapse text-left">
                   <thead>
                     <tr className="border-b border-slate-800 bg-slate-950/60 text-xs text-slate-400">
-                      <th className="p-3 sticky left-0 bg-slate-950 z-10 min-w-[180px]">
+                      <th className="p-3 sticky left-0 bg-slate-950 z-10 min-w-[190px]">
                         Team Member ({members.length})
                       </th>
                       {MORNING_SLOTS.map((slot) => (
@@ -595,104 +805,117 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/70 text-xs">
-                    {members.map((member) => (
-                      <tr key={member.id} className="hover:bg-slate-800/20">
-                        <td className="p-3 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-indigo-400">
-                              {member.avatar}
-                            </div>
-                            <div>
-                              <div className="font-semibold text-slate-100">{member.name}</div>
-                              <div className="text-[11px] text-slate-400">
-                                {member.role} • {member.dept}
+                    {members.map((member) => {
+                      const isMe = member.id === currentUser?.id;
+                      return (
+                        <tr
+                          key={member.id}
+                          className={isMe ? "bg-indigo-950/20 hover:bg-indigo-950/30" : "hover:bg-slate-800/20"}
+                        >
+                          <td className="p-3 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-indigo-400">
+                                {member.avatar}
+                              </div>
+                              <div>
+                                <div className="font-semibold text-slate-100 flex items-center gap-1.5">
+                                  {member.name}
+                                  {isMe && (
+                                    <span className="text-[10px] px-1.5 py-0.2 bg-indigo-600/30 text-indigo-300 rounded">
+                                      You
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-slate-400">
+                                  {member.role} • {member.dept}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* 4 Morning Slots */}
-                        {MORNING_SLOTS.map((slot) => {
-                          const key = `${selectedDate}_${slot.id}_${member.id}`;
-                          const task = tasks[key];
-                          const cat = task ? CATEGORIES[task.category] : null;
-                          return (
-                            <td
-                              key={slot.id}
-                              onClick={() => handleOpenCell(selectedDate, slot.id, member.id)}
-                              className="p-1.5 border-l border-slate-800/70 cursor-pointer align-top h-20"
-                            >
-                              {task ? (
-                                <div
-                                  className={`h-full p-2 rounded-lg border-l-4 ${cat.bg} ${cat.border} flex flex-col justify-between transition`}
-                                >
-                                  <div>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${cat.badge}`}>
-                                      {cat.label}
-                                    </span>
-                                    <div className="font-semibold text-slate-100 mt-1 line-clamp-2">
-                                      {task.title}
+                          {/* 4 Morning Slots */}
+                          {MORNING_SLOTS.map((slot) => {
+                            const key = `${selectedDate}_${slot.id}_${member.id}`;
+                            const task = tasks[key];
+                            const cat = task ? CATEGORIES[task.category] : null;
+                            return (
+                              <td
+                                key={slot.id}
+                                onClick={() => handleOpenCell(selectedDate, slot.id, member.id)}
+                                className="p-1.5 border-l border-slate-800/70 cursor-pointer align-top h-20"
+                              >
+                                {task ? (
+                                  <div
+                                    className={`h-full p-2 rounded-lg border-l-4 ${cat.bg} ${cat.border} flex flex-col justify-between transition`}
+                                  >
+                                    <div>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${cat.badge}`}>
+                                        {cat.label}
+                                      </span>
+                                      <div className="font-semibold text-slate-100 mt-1 line-clamp-2">
+                                        {task.title}
+                                      </div>
                                     </div>
+                                    {task.comments?.length > 0 && (
+                                      <div className="text-[10px] text-slate-300 flex items-center gap-1 mt-1">
+                                        <MessageSquare className="w-3 h-3" /> {task.comments.length}
+                                      </div>
+                                    )}
                                   </div>
-                                  {task.comments?.length > 0 && (
-                                    <div className="text-[10px] text-slate-300 flex items-center gap-1 mt-1">
-                                      <MessageSquare className="w-3 h-3" /> {task.comments.length}
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="h-full rounded-lg border border-dashed border-slate-800 hover:border-slate-600 flex items-center justify-center text-slate-600 hover:text-slate-400 transition">
-                                  <Plus className="w-4 h-4" />
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })}
-
-                        {/* Lunch Break Divider */}
-                        <td className="bg-slate-950/80 border-l border-slate-800 text-center text-[10px] text-slate-600 font-medium">
-                          13-14h
-                        </td>
-
-                        {/* 4 Afternoon Slots */}
-                        {AFTERNOON_SLOTS.map((slot) => {
-                          const key = `${selectedDate}_${slot.id}_${member.id}`;
-                          const task = tasks[key];
-                          const cat = task ? CATEGORIES[task.category] : null;
-                          return (
-                            <td
-                              key={slot.id}
-                              onClick={() => handleOpenCell(selectedDate, slot.id, member.id)}
-                              className="p-1.5 border-l border-slate-800/70 cursor-pointer align-top h-20"
-                            >
-                              {task ? (
-                                <div
-                                  className={`h-full p-2 rounded-lg border-l-4 ${cat.bg} ${cat.border} flex flex-col justify-between transition`}
-                                >
-                                  <div>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${cat.badge}`}>
-                                      {cat.label}
-                                    </span>
-                                    <div className="font-semibold text-slate-100 mt-1 line-clamp-2">
-                                      {task.title}
-                                    </div>
+                                ) : (
+                                  <div className="h-full rounded-lg border border-dashed border-slate-800 hover:border-slate-600 flex items-center justify-center text-slate-600 hover:text-slate-400 transition">
+                                    <Plus className="w-4 h-4" />
                                   </div>
-                                  {task.comments?.length > 0 && (
-                                    <div className="text-[10px] text-slate-300 flex items-center gap-1 mt-1">
-                                      <MessageSquare className="w-3 h-3" /> {task.comments.length}
+                                )}
+                              </td>
+                            );
+                          })}
+
+                          {/* Lunch Break Divider */}
+                          <td className="bg-slate-950/80 border-l border-slate-800 text-center text-[10px] text-slate-600 font-medium">
+                            13-14h
+                          </td>
+
+                          {/* 4 Afternoon Slots */}
+                          {AFTERNOON_SLOTS.map((slot) => {
+                            const key = `${selectedDate}_${slot.id}_${member.id}`;
+                            const task = tasks[key];
+                            const cat = task ? CATEGORIES[task.category] : null;
+                            return (
+                              <td
+                                key={slot.id}
+                                onClick={() => handleOpenCell(selectedDate, slot.id, member.id)}
+                                className="p-1.5 border-l border-slate-800/70 cursor-pointer align-top h-20"
+                              >
+                                {task ? (
+                                  <div
+                                    className={`h-full p-2 rounded-lg border-l-4 ${cat.bg} ${cat.border} flex flex-col justify-between transition`}
+                                  >
+                                    <div>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${cat.badge}`}>
+                                        {cat.label}
+                                      </span>
+                                      <div className="font-semibold text-slate-100 mt-1 line-clamp-2">
+                                        {task.title}
+                                      </div>
                                     </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="h-full rounded-lg border border-dashed border-slate-800 hover:border-slate-600 flex items-center justify-center text-slate-600 hover:text-slate-400 transition">
-                                  <Plus className="w-4 h-4" />
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
+                                    {task.comments?.length > 0 && (
+                                      <div className="text-[10px] text-slate-300 flex items-center gap-1 mt-1">
+                                        <MessageSquare className="w-3 h-3" /> {task.comments.length}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="h-full rounded-lg border border-dashed border-slate-800 hover:border-slate-600 flex items-center justify-center text-slate-600 hover:text-slate-400 transition">
+                                    <Plus className="w-4 h-4" />
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -706,11 +929,11 @@ export default function App() {
                 <div>
                   <h2 className="font-bold text-base">Individual 8-Hour Schedule</h2>
                   <p className="text-xs text-slate-400">
-                    Dedicated personal timetable for {selectedDate}
+                    Personal timetable for {selectedDate}
                   </p>
                 </div>
                 <select
-                  value={focusedMemberId}
+                  value={focusedMemberId || currentUser?.id}
                   onChange={(e) => setFocusedMemberId(e.target.value)}
                   className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold"
                 >
@@ -723,19 +946,19 @@ export default function App() {
               </div>
 
               <div className="grid md:grid-cols-2 gap-6">
-                {/* Morning Block (4 Hours) */}
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                   <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
                     <Sun className="w-4 h-4" /> Morning Shift (4 Hours)
                   </h3>
                   {MORNING_SLOTS.map((slot) => {
-                    const key = `${selectedDate}_${slot.id}_${focusedMemberId}`;
+                    const targetId = focusedMemberId || currentUser?.id;
+                    const key = `${selectedDate}_${slot.id}_${targetId}`;
                     const task = tasks[key];
                     const cat = task ? CATEGORIES[task.category] : null;
                     return (
                       <div
                         key={slot.id}
-                        onClick={() => handleOpenCell(selectedDate, slot.id, focusedMemberId)}
+                        onClick={() => handleOpenCell(selectedDate, slot.id, targetId)}
                         className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 cursor-pointer flex items-center justify-between"
                       >
                         <span className="text-xs font-mono text-slate-400">{slot.label}</span>
@@ -754,19 +977,19 @@ export default function App() {
                   })}
                 </div>
 
-                {/* Afternoon Block (4 Hours) */}
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                   <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
                     <Sunset className="w-4 h-4" /> Afternoon Shift (4 Hours)
                   </h3>
                   {AFTERNOON_SLOTS.map((slot) => {
-                    const key = `${selectedDate}_${slot.id}_${focusedMemberId}`;
+                    const targetId = focusedMemberId || currentUser?.id;
+                    const key = `${selectedDate}_${slot.id}_${targetId}`;
                     const task = tasks[key];
                     const cat = task ? CATEGORIES[task.category] : null;
                     return (
                       <div
                         key={slot.id}
-                        onClick={() => handleOpenCell(selectedDate, slot.id, focusedMemberId)}
+                        onClick={() => handleOpenCell(selectedDate, slot.id, targetId)}
                         className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 cursor-pointer flex items-center justify-between"
                       >
                         <span className="text-xs font-mono text-slate-400">{slot.label}</span>
@@ -826,44 +1049,41 @@ export default function App() {
             </div>
           )}
 
-          {/* 4. ADMIN & PERMISSIONS PANEL (10 to 50 Members) */}
+          {/* 4. ADMIN & PERMISSIONS PANEL */}
           {activeTab === "admin" && (
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <h2 className="font-bold text-base">Team Scaling & Role Management</h2>
+                  <h2 className="font-bold text-base">Team Directory & Access Permissions</h2>
                   <p className="text-xs text-slate-400">
-                    Year 1 starts with 10 members • Scales up to 50 members
+                    Logged in as <strong>{currentUser?.name}</strong> ({currentUser?.role})
                   </p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleScaleTeam(10)}
-                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold"
-                  >
-                    Reset to 10 Members
-                  </button>
-                  <button
-                    onClick={() => handleScaleTeam(50)}
-                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white"
-                  >
-                    Simulate 50 Members
-                  </button>
                 </div>
               </div>
 
-              {currentUser.role === "Admin" ? (
+              {currentUser?.role === "Admin" ? (
                 <form
                   onSubmit={handleAddMember}
                   className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap gap-3 items-end"
                 >
-                  <div className="flex-1 min-w-[180px]">
+                  <div className="flex-1 min-w-[150px]">
                     <label className="text-xs text-slate-400 block mb-1">Member Name</label>
                     <input
                       type="text"
+                      required
                       value={newMemberName}
                       onChange={(e) => setNewMemberName(e.target.value)}
-                      placeholder="e.g. Tiago M."
+                      placeholder="e.g. Paula S."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-[170px]">
+                    <label className="text-xs text-slate-400 block mb-1">Email (optional pre-link)</label>
+                    <input
+                      type="email"
+                      value={newMemberEmail}
+                      onChange={(e) => setNewMemberEmail(e.target.value)}
+                      placeholder="paula@org.pt"
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
                     />
                   </div>
@@ -885,19 +1105,19 @@ export default function App() {
                       type="text"
                       value={newMemberDept}
                       onChange={(e) => setNewMemberDept(e.target.value)}
-                      className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
                     />
                   </div>
                   <button
                     type="submit"
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-semibold"
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5"
                   >
-                    + Add Member
+                    <UserPlus className="w-3.5 h-3.5" /> Add Member
                   </button>
                 </form>
               ) : (
                 <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 p-4 rounded-2xl text-xs">
-                  Switch "Acting as" in the top right to an <strong>Admin</strong> user to add or remove members.
+                  Only <strong>Admin</strong> accounts can add/remove members or change user roles.
                 </div>
               )}
 
@@ -909,15 +1129,30 @@ export default function App() {
                         {m.avatar}
                       </div>
                       <div>
-                        <div className="font-semibold text-white">{m.name}</div>
+                        <div className="font-semibold text-white">
+                          {m.name} {m.email && <span className="text-slate-500 font-normal">({m.email})</span>}
+                        </div>
                         <div className="text-slate-400">{m.dept}</div>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-200 font-medium">
-                        {m.role}
-                      </span>
-                      {currentUser.role === "Admin" && m.id !== currentUser.id && (
+                      {currentUser?.role === "Admin" ? (
+                        <select
+                          value={m.role}
+                          onChange={(e) => handleChangeMemberRole(m.id, e.target.value)}
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-medium text-slate-200"
+                        >
+                          <option value="Member">Member</option>
+                          <option value="Moderator">Moderator</option>
+                          <option value="Admin">Admin</option>
+                        </select>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-200 font-medium">
+                          {m.role}
+                        </span>
+                      )}
+
+                      {currentUser?.role === "Admin" && m.id !== currentUser.id && (
                         <button
                           onClick={() => handleRemoveMember(m.id)}
                           className="text-rose-400 hover:text-rose-300 p-1"
@@ -933,7 +1168,7 @@ export default function App() {
           )}
         </main>
 
-        {/* RIGHT SIDEBAR: TEAM & DIRECT MESSAGE CHAT */}
+        {/* RIGHT SIDEBAR: TEAM CHAT */}
         <aside className="w-80 border-l border-slate-800 bg-slate-900/70 flex flex-col">
           <div className="p-3 border-b border-slate-800 flex items-center justify-between">
             <span className="text-xs font-bold flex items-center gap-1.5">
