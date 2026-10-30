@@ -17,6 +17,8 @@ import {
   Lock,
   Mail,
   UserPlus,
+  Download,
+  Repeat,
 } from "lucide-react";
 
 // ============================================================================
@@ -31,7 +33,7 @@ const supabase =
     : null;
 
 // ============================================================================
-// 2. SCHEDULE CONSTANTS (4 Hours Morning + 4 Hours Afternoon + 4 Categories)
+// 2. SCHEDULE CONSTANTS (4h Morning + 4h Afternoon + 4 Categories)
 // ============================================================================
 const MORNING_SLOTS = [
   { id: "m1", label: "09:00 - 10:00", period: "Morning" },
@@ -93,10 +95,9 @@ const MONTHS = [
 // 3. MAIN APPLICATION COMPONENT
 // ============================================================================
 export default function App() {
-  // Authentication State
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [authMode, setAuthMode] = useState("login"); // "login" | "signup"
+  const [authMode, setAuthMode] = useState("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
@@ -104,7 +105,6 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
 
-  // App Navigation & Data State
   const [activeTab, setActiveTab] = useState("daily");
   const [selectedDate, setSelectedDate] = useState("2026-10-29");
   const [members, setMembers] = useState([]);
@@ -114,14 +114,16 @@ export default function App() {
   const [chatChannel, setChatChannel] = useState("general");
   const [chatInput, setChatInput] = useState("");
 
-  // Task Modal State
+  // Task Modal State (with Recurring Days support)
   const [selectedCell, setSelectedCell] = useState(null);
   const [formTitle, setFormTitle] = useState("");
   const [formCategory, setFormCategory] = useState("member");
   const [formNotes, setFormNotes] = useState("");
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurringDaysCount, setRecurringDaysCount] = useState(5); // e.g. 5 days (Workweek)
   const [commentInput, setCommentInput] = useState("");
 
-  // Admin Form State
+  // Admin State
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberEmail, setNewMemberEmail] = useState("");
   const [newMemberRole, setNewMemberRole] = useState("Member");
@@ -129,9 +131,7 @@ export default function App() {
 
   const [dbStatus, setDbStatus] = useState(supabase ? "Connecting..." : "Missing .env Keys");
 
-  // --------------------------------------------------------------------------
-  // LISTEN FOR SUPABASE LOGIN / LOGOUT SESSION
-  // --------------------------------------------------------------------------
+  // Auth Listener
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
@@ -152,9 +152,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // --------------------------------------------------------------------------
-  // LOAD DATABASE & ENSURE LOGGED-IN USER HAS A PROFILE ROW
-  // --------------------------------------------------------------------------
+  // Load Database & Sync User
   useEffect(() => {
     if (!supabase || !session?.user) return;
 
@@ -163,7 +161,6 @@ export default function App() {
         const user = session.user;
         const userEmail = (user.email || "").toLowerCase();
 
-        // 1. Fetch all profiles
         const { data: existingProfiles, error: errProf } = await supabase
           .from("profiles")
           .select("*")
@@ -172,14 +169,11 @@ export default function App() {
         if (errProf) throw errProf;
 
         let allMembers = existingProfiles || [];
-
-        // Check if logged-in user already has a profile by ID or pre-invited Email
         let myProfile =
           allMembers.find((m) => m.id === user.id) ||
           allMembers.find((m) => m.email && m.email.toLowerCase() === userEmail);
 
         if (!myProfile) {
-          // Determine name & initials from signup metadata or email
           const fullName =
             user.user_metadata?.full_name || userEmail.split("@")[0] || "Team Member";
           const dept = user.user_metadata?.dept || "General";
@@ -190,7 +184,6 @@ export default function App() {
             .toUpperCase()
             .slice(0, 2);
 
-          // If no real email-linked Admin exists yet, make the first registered user Admin!
           const hasRealAdmin = allMembers.some((m) => m.role === "Admin" && m.email);
           const assignedRole = hasRealAdmin ? "Member" : "Admin";
 
@@ -207,7 +200,6 @@ export default function App() {
           allMembers = [newProfile, ...allMembers];
           myProfile = newProfile;
         } else if (myProfile.id !== user.id) {
-          // If an Admin pre-added them by email, update the profile ID to match their Auth ID
           const updatedProfile = { ...myProfile, id: user.id, email: userEmail };
           await supabase.from("profiles").delete().eq("id", myProfile.id);
           await supabase.from("profiles").upsert(updatedProfile);
@@ -218,7 +210,6 @@ export default function App() {
         setMembers(allMembers);
         setFocusedMemberId(myProfile.id);
 
-        // 2. Load Schedule Tasks & Comments
         const { data: dbTasks } = await supabase
           .from("schedule_tasks")
           .select("*, task_comments(*)");
@@ -244,7 +235,6 @@ export default function App() {
           setTasks(loadedTasks);
         }
 
-        // 3. Load Chat Messages
         const { data: dbMsgs } = await supabase
           .from("messages")
           .select("*")
@@ -274,7 +264,6 @@ export default function App() {
     syncUserAndLoadData();
   }, [session]);
 
-  // Identify the currently logged-in user's profile
   const currentUser = useMemo(() => {
     if (!session?.user) return null;
     const userEmail = (session.user.email || "").toLowerCase();
@@ -291,9 +280,6 @@ export default function App() {
     );
   }, [members, session]);
 
-  // --------------------------------------------------------------------------
-  // HANDLE LOGIN OR SIGNUP SUBMIT
-  // --------------------------------------------------------------------------
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     if (!supabase) return;
@@ -321,30 +307,22 @@ export default function App() {
         if (error) throw error;
       }
     } catch (err) {
-      setAuthError(err.message || "Authentication failed. Check your email and password.");
+      setAuthError(err.message || "Authentication failed.");
     } finally {
       setAuthSubmitting(false);
     }
   };
 
   const handleSignOut = async () => {
-    if (supabase) {
-      await supabase.auth.signOut();
-    }
+    if (supabase) await supabase.auth.signOut();
   };
 
-  // --------------------------------------------------------------------------
-  // PERMISSIONS: Admin & Moderator can edit any slot; Member edits own row
-  // --------------------------------------------------------------------------
   const canEditSlot = (targetMemberId) => {
     if (!currentUser) return false;
     if (currentUser.role === "Admin" || currentUser.role === "Moderator") return true;
     return currentUser.id === targetMemberId;
   };
 
-  // --------------------------------------------------------------------------
-  // OPEN, SAVE, DELETE TASK & COMMENTS
-  // --------------------------------------------------------------------------
   const handleOpenCell = (dateKey, slotId, memberId) => {
     const key = `${dateKey}_${slotId}_${memberId}`;
     const existing = tasks[key];
@@ -352,38 +330,59 @@ export default function App() {
     setFormTitle(existing ? existing.title : "");
     setFormCategory(existing ? existing.category : "member");
     setFormNotes(existing ? existing.notes : "");
+    setIsRecurring(false);
+    setRecurringDaysCount(5);
     setCommentInput("");
   };
 
+  // ==========================================================================
+  // SAVE TASK (Supports Recurring Multi-Day Assignment)
+  // ==========================================================================
   const handleSaveTask = async (e) => {
     e.preventDefault();
     if (!selectedCell || !formTitle.trim()) return;
 
-    const key = `${selectedCell.dateKey}_${selectedCell.slotId}_${selectedCell.memberId}`;
-    const existing = tasks[key];
-    const taskId = existing?.id || `t_${Date.now()}`;
+    const { dateKey, slotId, memberId } = selectedCell;
+    const baseDate = new Date(dateKey);
+    const daysToSave = isRecurring ? Math.max(1, Math.min(30, recurringDaysCount)) : 1;
 
-    const updatedTask = {
-      id: taskId,
-      title: formTitle.trim(),
-      category: formCategory,
-      notes: formNotes.trim(),
-      comments: existing ? existing.comments : [],
-    };
+    let updatedTasksCopy = { ...tasks };
+    let dbUpserts = [];
 
-    setTasks((prev) => ({ ...prev, [key]: updatedTask }));
+    for (let i = 0; i < daysToSave; i++) {
+      const targetDateObj = new Date(baseDate);
+      targetDateObj.setDate(baseDate.getDate() + i);
+      const targetDateKey = targetDateObj.toISOString().split("T")[0];
+
+      const key = `${targetDateKey}_${slotId}_${memberId}`;
+      const existing = updatedTasksCopy[key];
+      const taskId = existing?.id || `t_${Date.now()}_${i}`;
+
+      const newTaskObj = {
+        id: taskId,
+        title: formTitle.trim(),
+        category: formCategory,
+        notes: formNotes.trim(),
+        comments: existing ? existing.comments : [],
+      };
+
+      updatedTasksCopy[key] = newTaskObj;
+      dbUpserts.push({
+        id: taskId,
+        task_date: targetDateKey,
+        slot_id: slotId,
+        member_id: memberId,
+        title: newTaskObj.title,
+        category: newTaskObj.category,
+        notes: newTaskObj.notes,
+      });
+    }
+
+    setTasks(updatedTasksCopy);
     setSelectedCell(null);
 
     if (supabase) {
-      await supabase.from("schedule_tasks").upsert({
-        id: taskId,
-        task_date: selectedCell.dateKey,
-        slot_id: selectedCell.slotId,
-        member_id: selectedCell.memberId,
-        title: updatedTask.title,
-        category: updatedTask.category,
-        notes: updatedTask.notes,
-      });
+      await supabase.from("schedule_tasks").upsert(dbUpserts);
     }
   };
 
@@ -439,9 +438,6 @@ export default function App() {
     }
   };
 
-  // --------------------------------------------------------------------------
-  // SEND TEAM CHAT MESSAGE
-  // --------------------------------------------------------------------------
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim() || !currentUser) return;
@@ -472,9 +468,42 @@ export default function App() {
     }
   };
 
-  // --------------------------------------------------------------------------
-  // ADMIN CONTROLS: PRE-ADD MEMBER, CHANGE ROLE, OR REMOVE MEMBER
-  // --------------------------------------------------------------------------
+  // ==========================================================================
+  // CSV EXPORT FOR GRANT REPORTING
+  // ==========================================================================
+  const exportMemberScheduleCSV = (targetMemberId) => {
+    const member = members.find((m) => m.id === targetMemberId);
+    if (!member) return;
+
+    let csvContent = "data:text/csv;charset=utf-8,Date,Shift,Slot,Category,Task Title,Notes\n";
+
+    Object.entries(tasks).forEach(([key, task]) => {
+      const [date, slotId, memId] = key.split("_");
+      if (memId === targetMemberId) {
+        const slotObj = ALL_SLOTS.find((s) => s.id === slotId);
+        const catObj = CATEGORIES[task.category];
+        const row = [
+          date,
+          slotObj?.period || "Day",
+          slotObj?.label || slotId,
+          catObj?.label || task.category,
+          `"${(task.title || "").replace(/"/g, '""')}"`,
+          `"${(task.notes || "").replace(/"/g, '""')}"`,
+        ];
+        csvContent += row.join(",") + "\n";
+      }
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Sync8_Schedule_${member.name.replace(/\s+/g, "_")}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Admin Controls
   const handleAddMember = async (e) => {
     e.preventDefault();
     if (!newMemberName.trim() || currentUser?.role !== "Admin") return;
@@ -500,9 +529,7 @@ export default function App() {
     setNewMemberName("");
     setNewMemberEmail("");
 
-    if (supabase) {
-      await supabase.from("profiles").upsert(newMember);
-    }
+    if (supabase) await supabase.from("profiles").upsert(newMember);
   };
 
   const handleChangeMemberRole = async (memberId, updatedRole) => {
@@ -518,14 +545,9 @@ export default function App() {
   const handleRemoveMember = async (id) => {
     if (currentUser?.role !== "Admin" || members.length <= 1) return;
     setMembers((prev) => prev.filter((m) => m.id !== id));
-    if (supabase) {
-      await supabase.from("profiles").delete().eq("id", id);
-    }
+    if (supabase) await supabase.from("profiles").delete().eq("id", id);
   };
 
-  // ==========================================================================
-  // SCREEN 1: AUTHENTICATION LOGIN / SIGNUP SCREEN
-  // ==========================================================================
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-200 flex items-center justify-center text-sm">
@@ -544,35 +566,22 @@ export default function App() {
             </div>
             <div>
               <h1 className="font-bold text-lg">Sync8 Annual Platform</h1>
-              <p className="text-xs text-slate-400">
-                4h Morning + 4h Afternoon Team Schedule
-              </p>
+              <p className="text-xs text-slate-400">4h Morning + 4h Afternoon Schedule</p>
             </div>
           </div>
 
-          {/* Toggle Login vs Sign Up */}
           <div className="grid grid-cols-2 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
             <button
               type="button"
-              onClick={() => {
-                setAuthMode("login");
-                setAuthError("");
-              }}
-              className={`py-2 rounded-lg transition ${
-                authMode === "login" ? "bg-indigo-600 text-white" : "text-slate-400"
-              }`}
+              onClick={() => { setAuthMode("login"); setAuthError(""); }}
+              className={`py-2 rounded-lg transition ${authMode === "login" ? "bg-indigo-600 text-white" : "text-slate-400"}`}
             >
               Sign In
             </button>
             <button
               type="button"
-              onClick={() => {
-                setAuthMode("signup");
-                setAuthError("");
-              }}
-              className={`py-2 rounded-lg transition ${
-                authMode === "signup" ? "bg-indigo-600 text-white" : "text-slate-400"
-              }`}
+              onClick={() => { setAuthMode("signup"); setAuthError(""); }}
+              className={`py-2 rounded-lg transition ${authMode === "signup" ? "bg-indigo-600 text-white" : "text-slate-400"}`}
             >
               Create Account
             </button>
@@ -608,7 +617,7 @@ export default function App() {
                     required
                     value={authDept}
                     onChange={(e) => setAuthDept(e.target.value)}
-                    placeholder="e.g. Management, Youth Work, Community"
+                    placeholder="e.g. Management, Youth Work"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white"
                   />
                 </div>
@@ -631,7 +640,7 @@ export default function App() {
             </div>
 
             <div>
-              <label className="text-slate-400 block mb-1">Password (min 6 characters)</label>
+              <label className="text-slate-400 block mb-1">Password (min 6 chars)</label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
                 <input
@@ -649,30 +658,19 @@ export default function App() {
             <button
               type="submit"
               disabled={authSubmitting}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-2.5 rounded-xl shadow-lg shadow-indigo-600/20 transition"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-2.5 rounded-xl shadow-lg transition"
             >
-              {authSubmitting
-                ? "Please wait..."
-                : authMode === "signup"
-                ? "Create Account & Enter Schedule"
-                : "Sign In to Schedule"}
+              {authSubmitting ? "Please wait..." : authMode === "signup" ? "Create Account & Enter" : "Sign In"}
             </button>
           </form>
-
-          <p className="text-[11px] text-slate-400 text-center">
-            First registered account is automatically granted <strong>Admin</strong> permissions.
-          </p>
         </div>
       </div>
     );
   }
 
-  // ==========================================================================
-  // SCREEN 2: AUTHENTICATED CALENDAR PLATFORM
-  // ==========================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* TOP NAVIGATION BAR */}
+      {/* TOP NAVBAR */}
       <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur px-6 py-3 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-600/30">
@@ -692,13 +690,11 @@ export default function App() {
                 {dbStatus}
               </span>
             </div>
-            <p className="text-xs text-slate-400">
-              4h Morning + 4h Afternoon • {members.length} Active Members
-            </p>
+            <p className="text-xs text-slate-400">4h Morning + 4h Afternoon • {members.length} Members</p>
           </div>
         </div>
 
-        {/* VIEW TABS */}
+        {/* NAVIGATION TABS */}
         <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
           {[
             { id: "daily", label: "Daily 8h Matrix", icon: Clock },
@@ -724,8 +720,17 @@ export default function App() {
           })}
         </div>
 
-        {/* LOGGED-IN USER BADGE & SIGN OUT */}
+        {/* USER BADGE & EXPORT BUTTON & SIGN OUT */}
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => exportMemberScheduleCSV(currentUser?.id)}
+            title="Download CSV for grant reporting"
+            className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export My CSV
+          </button>
+
           <div className="bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 text-xs flex items-center gap-2">
             <span className="w-6 h-6 rounded-md bg-indigo-600 text-white font-bold flex items-center justify-center text-[11px]">
               {currentUser?.avatar || "U"}
@@ -737,18 +742,18 @@ export default function App() {
               </span>
             </div>
           </div>
+
           <button
             onClick={handleSignOut}
             title="Sign Out"
             className="bg-slate-800 hover:bg-rose-600/20 hover:text-rose-300 border border-slate-700 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1.5 transition"
           >
             <LogOut className="w-3.5 h-3.5" />
-            Sign Out
           </button>
         </div>
       </header>
 
-      {/* COLOR LEGEND & DATE BAR */}
+      {/* DATE & COLOR LEGEND BAR */}
       <div className="bg-slate-900/50 border-b border-slate-800 px-6 py-2.5 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <label className="text-xs text-slate-400 font-medium">Selected Date:</label>
@@ -770,10 +775,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* MAIN WORKSPACE + RIGHT CHAT SIDEBAR */}
+      {/* MAIN VIEW + CHAT */}
       <div className="flex-1 flex overflow-hidden">
         <main className="flex-1 overflow-auto p-6">
-          {/* 1. DAILY 8-HOUR TEAM MATRIX */}
+          {/* DAILY MATRIX */}
           {activeTab === "daily" && (
             <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
@@ -813,27 +818,35 @@ export default function App() {
                           className={isMe ? "bg-indigo-950/20 hover:bg-indigo-950/30" : "hover:bg-slate-800/20"}
                         >
                           <td className="p-3 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-indigo-400">
-                                {member.avatar}
-                              </div>
-                              <div>
-                                <div className="font-semibold text-slate-100 flex items-center gap-1.5">
-                                  {member.name}
-                                  {isMe && (
-                                    <span className="text-[10px] px-1.5 py-0.2 bg-indigo-600/30 text-indigo-300 rounded">
-                                      You
-                                    </span>
-                                  )}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-indigo-400">
+                                  {member.avatar}
                                 </div>
-                                <div className="text-[11px] text-slate-400">
-                                  {member.role} • {member.dept}
+                                <div>
+                                  <div className="font-semibold text-slate-100 flex items-center gap-1.5">
+                                    {member.name}
+                                    {isMe && (
+                                      <span className="text-[10px] px-1.5 py-0.2 bg-indigo-600/30 text-indigo-300 rounded">
+                                        You
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-slate-400">
+                                    {member.role} • {member.dept}
+                                  </div>
                                 </div>
                               </div>
+                              <button
+                                onClick={() => exportMemberScheduleCSV(member.id)}
+                                title="Download CSV"
+                                className="text-slate-500 hover:text-emerald-400 p-1"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           </td>
 
-                          {/* 4 Morning Slots */}
                           {MORNING_SLOTS.map((slot) => {
                             const key = `${selectedDate}_${slot.id}_${member.id}`;
                             const task = tasks[key];
@@ -871,12 +884,10 @@ export default function App() {
                             );
                           })}
 
-                          {/* Lunch Break Divider */}
                           <td className="bg-slate-950/80 border-l border-slate-800 text-center text-[10px] text-slate-600 font-medium">
                             13-14h
                           </td>
 
-                          {/* 4 Afternoon Slots */}
                           {AFTERNOON_SLOTS.map((slot) => {
                             const key = `${selectedDate}_${slot.id}_${member.id}`;
                             const task = tasks[key];
@@ -922,27 +933,33 @@ export default function App() {
             </div>
           )}
 
-          {/* 2. INDIVIDUAL MEMBER SCHEDULE */}
+          {/* INDIVIDUAL SCHEDULE */}
           {activeTab === "individual" && (
             <div className="max-w-4xl mx-auto space-y-6">
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between">
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <h2 className="font-bold text-base">Individual 8-Hour Schedule</h2>
-                  <p className="text-xs text-slate-400">
-                    Personal timetable for {selectedDate}
-                  </p>
+                  <p className="text-xs text-slate-400">Personal timetable for {selectedDate}</p>
                 </div>
-                <select
-                  value={focusedMemberId || currentUser?.id}
-                  onChange={(e) => setFocusedMemberId(e.target.value)}
-                  className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold"
-                >
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} ({m.role})
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => exportMemberScheduleCSV(focusedMemberId || currentUser?.id)}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Export Member CSV
+                  </button>
+                  <select
+                    value={focusedMemberId || currentUser?.id}
+                    onChange={(e) => setFocusedMemberId(e.target.value)}
+                    className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold"
+                  >
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="grid md:grid-cols-2 gap-6">
@@ -1011,14 +1028,11 @@ export default function App() {
             </div>
           )}
 
-          {/* 3. 12-MONTH ANNUAL CALENDAR OVERVIEW */}
+          {/* 12-MONTH ANNUAL */}
           {activeTab === "annual" && (
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {MONTHS.map((monthName, monthIndex) => (
-                <div
-                  key={monthName}
-                  className="bg-slate-900 border border-slate-800 rounded-2xl p-4"
-                >
+                <div key={monthName} className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
                   <h3 className="font-bold text-sm text-indigo-400 mb-3">{monthName} 2026</h3>
                   <div className="grid grid-cols-7 gap-1 text-[11px] text-center">
                     {Array.from({ length: 28 }, (_, i) => {
@@ -1029,14 +1043,9 @@ export default function App() {
                       return (
                         <button
                           key={day}
-                          onClick={() => {
-                            setSelectedDate(dateStr);
-                            setActiveTab("daily");
-                          }}
+                          onClick={() => { setSelectedDate(dateStr); setActiveTab("daily"); }}
                           className={`py-1.5 rounded-lg font-medium transition ${
-                            isSelected
-                              ? "bg-indigo-600 text-white font-bold"
-                              : "hover:bg-slate-800 text-slate-300"
+                            isSelected ? "bg-indigo-600 text-white font-bold" : "hover:bg-slate-800 text-slate-300"
                           }`}
                         >
                           {i + 1}
@@ -1049,16 +1058,14 @@ export default function App() {
             </div>
           )}
 
-          {/* 4. ADMIN & PERMISSIONS PANEL */}
+          {/* ADMIN */}
           {activeTab === "admin" && (
             <div className="max-w-4xl mx-auto space-y-6">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h2 className="font-bold text-base">Team Directory & Access Permissions</h2>
-                  <p className="text-xs text-slate-400">
-                    Logged in as <strong>{currentUser?.name}</strong> ({currentUser?.role})
-                  </p>
-                </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                <h2 className="font-bold text-base">Team Directory & Access Permissions</h2>
+                <p className="text-xs text-slate-400">
+                  Logged in as <strong>{currentUser?.name}</strong> ({currentUser?.role})
+                </p>
               </div>
 
               {currentUser?.role === "Admin" ? (
@@ -1073,17 +1080,17 @@ export default function App() {
                       required
                       value={newMemberName}
                       onChange={(e) => setNewMemberName(e.target.value)}
-                      placeholder="e.g. Paula S."
+                      placeholder="e.g. Tiago M."
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
                     />
                   </div>
                   <div className="flex-1 min-w-[170px]">
-                    <label className="text-xs text-slate-400 block mb-1">Email (optional pre-link)</label>
+                    <label className="text-xs text-slate-400 block mb-1">Email</label>
                     <input
                       type="email"
                       value={newMemberEmail}
                       onChange={(e) => setNewMemberEmail(e.target.value)}
-                      placeholder="paula@org.pt"
+                      placeholder="tiago@org.pt"
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
                     />
                   </div>
@@ -1136,6 +1143,13 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => exportMemberScheduleCSV(m.id)}
+                        className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg text-xs flex items-center gap-1"
+                      >
+                        <Download className="w-3 h-3" /> CSV
+                      </button>
+
                       {currentUser?.role === "Admin" ? (
                         <select
                           value={m.role}
@@ -1153,10 +1167,7 @@ export default function App() {
                       )}
 
                       {currentUser?.role === "Admin" && m.id !== currentUser.id && (
-                        <button
-                          onClick={() => handleRemoveMember(m.id)}
-                          className="text-rose-400 hover:text-rose-300 p-1"
-                        >
+                        <button onClick={() => handleRemoveMember(m.id)} className="text-rose-400 hover:text-rose-300 p-1">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       )}
@@ -1168,7 +1179,7 @@ export default function App() {
           )}
         </main>
 
-        {/* RIGHT SIDEBAR: TEAM CHAT */}
+        {/* TEAM CHAT */}
         <aside className="w-80 border-l border-slate-800 bg-slate-900/70 flex flex-col">
           <div className="p-3 border-b border-slate-800 flex items-center justify-between">
             <span className="text-xs font-bold flex items-center gap-1.5">
@@ -1207,17 +1218,14 @@ export default function App() {
               placeholder="Write a message..."
               className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs"
             />
-            <button
-              type="submit"
-              className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded-xl"
-            >
+            <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white p-2 rounded-xl">
               <Send className="w-4 h-4" />
             </button>
           </form>
         </aside>
       </div>
 
-      {/* TASK EDIT & COMMENTS MODAL */}
+      {/* TASK EDIT & RECURRING MODAL */}
       {selectedCell && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
@@ -1250,7 +1258,7 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">Task Color Category</label>
+                  <label className="text-slate-400 block mb-1">Color Category</label>
                   <div className="grid grid-cols-2 gap-2">
                     {Object.values(CATEGORIES).map((cat) => (
                       <button
@@ -1279,6 +1287,34 @@ export default function App() {
                   />
                 </div>
 
+                {/* RECURRING MULTI-DAY TOGGLE */}
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Repeat className="w-3.5 h-3.5 text-indigo-400" /> Repeat across multiple days?
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={isRecurring}
+                      onChange={(e) => setIsRecurring(e.target.checked)}
+                      className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                    />
+                  </div>
+                  {isRecurring && (
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-slate-400">Number of consecutive days:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={recurringDaysCount}
+                        onChange={(e) => setRecurringDaysCount(parseInt(e.target.value) || 1)}
+                        className="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-center font-bold"
+                      />
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex justify-between pt-2">
                   <button
                     type="button"
@@ -1291,17 +1327,17 @@ export default function App() {
                     type="submit"
                     className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl font-semibold"
                   >
-                    Save Task Slot
+                    {isRecurring ? `Save ${recurringDaysCount} Days` : "Save Task Slot"}
                   </button>
                 </div>
               </form>
             ) : (
               <div className="text-xs text-amber-300 bg-amber-500/10 p-3 rounded-xl">
-                Members can only edit their own schedule slots. You can still leave a comment below!
+                Members can only edit their own schedule slots. You can still leave comments below!
               </div>
             )}
 
-            {/* TASK COMMENTS SECTION */}
+            {/* COMMENTS SECTION */}
             {tasks[`${selectedCell.dateKey}_${selectedCell.slotId}_${selectedCell.memberId}`] && (
               <div className="border-t border-slate-800 pt-3 space-y-2 text-xs">
                 <div className="font-semibold text-slate-300">Task Comments</div>
@@ -1321,7 +1357,7 @@ export default function App() {
                     type="text"
                     value={commentInput}
                     onChange={(e) => setCommentInput(e.target.value)}
-                    placeholder="Add a comment on this task..."
+                    placeholder="Add a comment..."
                     className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5"
                   />
                   <button
